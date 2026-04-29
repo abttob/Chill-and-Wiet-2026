@@ -142,7 +142,20 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 // --- AI Setup ---
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+const getGeminiKey = () => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key || key === "MY_GEMINI_API_KEY" || key.trim() === "") return null;
+  return key;
+};
+
+// Lazy initialize to avoid errors on load
+let aiInstance: any = null;
+const getAI = () => {
+  const key = getGeminiKey();
+  if (!key) return null;
+  if (!aiInstance) aiInstance = new GoogleGenAI({ apiKey: key });
+  return aiInstance;
+};
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -218,16 +231,19 @@ export default function App() {
 
   // --- Actions ---
   const generateSong = async () => {
+    const ai = getAI();
+    if (!ai) {
+      setSong("⚠️ Fehler: GEMINI_API_KEY nicht gefunden.\n\nSo fixst du das:\n1. Klicke oben links auf das 'Settings' (Zahnrad) Icon.\n2. Wähle 'Secrets'.\n3. Füge 'GEMINI_API_KEY' hinzu mit deinem API Key.\n4. Starte den Dev-Server neu (oder warte kurz).");
+      return;
+    }
     setIsGeneratingSong(true);
     try {
-      const result = await ai.models.generateContent({
-        model: "gemini-flash-latest",
-        contents: "Erstelle einen legendären, rhythmischen Songtext (ca. 3 Strophen und ein fetter Refrain) für die 'Lega dei Fratelli'. Kontext: Fratellihof-Wochenende in Rivera, Tessin. Motto: 'Gute Schneid, halbe Arbeit, zwei Rinder'. Inside-Jokes zum Einbauen: 'Druffa gegen Rechts', 'Hueresöhn' (liebevoll gemeint), 'Anti-Stau Strategie (Zug)', 'Death-Sense schärfen', 'Wiet machen', 'Grappa im Loch'. Stil: Schweizer Mundart (Zürich/Tessiner Mix), asozial aber herzlich, hochemotional, wie eine Hymne. Struktur: Klar getrennte Strophen und Refrain. Crew: Toby (Polier), Marion, Tai, Jojo, Flo, Vali, Stephie, Marco, Tim. WICHTIG: Es muss ein richtiger Banger sein!",
-      });
-      if (!result.text) {
-        throw new Error("Kein Text generiert");
-      }
-      setSong(result.text);
+      const model = ai.getGenerativeModel({ model: "gemini-1.5-flash" });
+      const result = await model.generateContent("Erstelle einen legendären, rhythmischen Songtext (ca. 3 Strophen und ein fetter Refrain) für die 'Lega dei Fratelli'. Kontext: Fratellihof-Wochenende in Rivera, Tessin. Motto: 'Gute Schneid, halbe Arbeit, zwei Rinder'. Inside-Jokes zum Einbauen: 'Druffa gegen Rechts', 'Hueresöhn' (liebevoll gemeint), 'Anti-Stau Strategie (Zug)', 'Death-Sense schärfen', 'Wiet machen', 'Grappa im Loch'. Stil: Schweizer Mundart (Zürich/Tessiner Mix), asozial aber herzlich, hochemotional, wie eine Hymne. Struktur: Klar getrennte Strophen und Refrain. Crew: Toby (Polier), Marion, Tai, Jojo, Flo, Vali, Stephie, Marco, Tim. WICHTIG: Es muss ein richtiger Banger sein!");
+      const response = await result.response;
+      const text = response.text();
+      if (!text) throw new Error("Kein Text generiert");
+      setSong(text);
     } catch (error: any) {
       console.error(error);
       setSong(`Fehler: ${error.message || "Unbekannter Fehler beim Song-Generieren."}`);
