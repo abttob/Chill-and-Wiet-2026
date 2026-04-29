@@ -142,16 +142,7 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
 }
 
 // --- AI Setup ---
-const getGeminiKey = () => {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) {
-    console.warn("GEMINI_API_KEY is missing. AI features will not work.");
-    return "dummy-key";
-  }
-  return key;
-};
-
-const ai = new GoogleGenAI({ apiKey: getGeminiKey() });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -218,29 +209,28 @@ export default function App() {
     localStorage.setItem('fratelli_crew', JSON.stringify(crew));
   }, [crew]);
 
+  // Stop speech synthesis on tab change or unmount
   useEffect(() => {
-    localStorage.setItem('fratelli_packlist', JSON.stringify(packList));
-  }, [packList]);
+    return () => {
+      window.speechSynthesis.cancel();
+    };
+  }, [activeTab]);
 
   // --- Actions ---
   const generateSong = async () => {
     setIsGeneratingSong(true);
     try {
       const result = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: `Erstelle einen legendären, rhythmischen Songtext (ca. 3 Strophen und ein fetter Refrain) für die "Lega dei Fratelli". 
-        Kontext: Fratellihof-Wochenende in Rivera, Tessin. 
-        Motto: "Gute Schneid, halbe Arbeit, zwei Rinder."
-        Inside-Jokes zum Einbauen: "Druffa gegen Rechts", "Hurensöhne", "Anti-Stau Strategie (Zug)", "Death-Sense schärfen", "Wiet machen", "Grappa im Loch".
-        Stil: Mundart (Zürich/Tessiner Mix), asozial aber herzlich, hochemotional, wie eine Hymne. 
-        Struktur: Klar getrennte Strophen und Refrain. 
-        Crew: Toby (Polier), Marion, Tai, Jojo, Flo, Vali, Stephie, Marco, Tim. 
-        WICHTIG: Es muss ein richtiger Banger sein!`,
+        model: "gemini-flash-latest",
+        contents: "Erstelle einen legendären, rhythmischen Songtext (ca. 3 Strophen und ein fetter Refrain) für die 'Lega dei Fratelli'. Kontext: Fratellihof-Wochenende in Rivera, Tessin. Motto: 'Gute Schneid, halbe Arbeit, zwei Rinder'. Inside-Jokes zum Einbauen: 'Druffa gegen Rechts', 'Hueresöhn' (liebevoll gemeint), 'Anti-Stau Strategie (Zug)', 'Death-Sense schärfen', 'Wiet machen', 'Grappa im Loch'. Stil: Schweizer Mundart (Zürich/Tessiner Mix), asozial aber herzlich, hochemotional, wie eine Hymne. Struktur: Klar getrennte Strophen und Refrain. Crew: Toby (Polier), Marion, Tai, Jojo, Flo, Vali, Stephie, Marco, Tim. WICHTIG: Es muss ein richtiger Banger sein!",
       });
-      setSong(result.text || "Song konnte nicht geladen werden.");
-    } catch (error) {
+      if (!result.text) {
+        throw new Error("Kein Text generiert");
+      }
+      setSong(result.text);
+    } catch (error: any) {
       console.error(error);
-      setSong("Unerwarteter Fehler beim Song-Generieren.");
+      setSong(`Fehler: ${error.message || "Unbekannter Fehler beim Song-Generieren."}`);
     } finally {
       setIsGeneratingSong(false);
     }
@@ -329,6 +319,9 @@ export default function App() {
       clearInterval(timerId);
       audioCtx.close();
     };
+    
+    // Stop any current speech
+    window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
   };
 
@@ -377,15 +370,16 @@ export default function App() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card title="LA CREW" icon={<Users className="w-5 h-5" />} color="bg-slate-900 text-white">
           <div className="space-y-1 text-sm font-bold">
-            {INITIAL_CREW.slice(0, 7).map(name => (
-              <div key={name} className="flex justify-between border-b border-slate-100 py-1">
-                <span>{name}</span>
-                <span className="text-green-600">✓</span>
+            {crew.slice(0, 8).map(member => (
+              <div key={member.id} className="flex justify-between border-b border-slate-100 py-1">
+                <span className="truncate mr-2">{member.name}</span>
+                <span className="text-green-600 shrink-0">{member.transport !== 'unbekannt' ? '✓' : '...'}</span>
               </div>
             ))}
+            {crew.length > 8 && <p className="text-[10px] text-center opacity-50 mt-1">Und {crew.length - 8} weitere...</p>}
             <div className="mt-4 bg-blue-100 p-2 border border-blue-900 rounded text-slate-900">
-              <p className="text-[10px] font-black uppercase">Fahrplan:</p>
-              <p className="text-xs">Do Nachmittag per Zug (Anti-Stau Strategie!)</p>
+              <p className="text-[10px] font-black uppercase">Haupt-Strategie:</p>
+              <p className="text-xs">Do Nachmittag per Zug (Anti-Stau!)</p>
             </div>
           </div>
         </Card>
