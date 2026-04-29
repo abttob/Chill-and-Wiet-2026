@@ -83,7 +83,16 @@ const STANDARD_PACKLIST: string[] = [
 ];
 
 // --- AI Setup ---
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+const getGeminiKey = () => {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) {
+    console.warn("GEMINI_API_KEY is missing. AI features will not work.");
+    return "dummy-key";
+  }
+  return key;
+};
+
+const ai = new GoogleGenAI({ apiKey: getGeminiKey() });
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
