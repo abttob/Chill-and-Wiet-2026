@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "GalleryPhoto": {
+      "title": "GalleryPhoto",
+      "description": "A photo uploaded to the Fratelli gallery",
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "description": "The base64 image data or URL" },
+        "caption": { "type": "string", "description": "Optional caption for the photo" },
+        "uploadedBy": { "type": "string", "description": "User ID of the uploader" },
+        "uploaderName": { "type": "string", "description": "Name of the uploader" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" }
+      },
+      "required": ["url", "uploadedBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/gallery/{photoId}": {
+      "schema": "GalleryPhoto",
+      "description": "Collection of photos from the Fratelli weekend"
+    }
+  }
+}

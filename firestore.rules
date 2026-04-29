@@ -1,0 +1,46 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 3. Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Validation Blueprints
+    function isValidGalleryPhoto(data) {
+      return data.keys().hasAll(['url', 'uploadedBy', 'uploaderName', 'createdAt']) 
+        && data.keys().size() == 4
+        && data.url is string && data.url.size() <= 1048576 // 1MB limit for safety
+        && data.uploadedBy == request.auth.uid
+        && data.uploaderName is string && data.uploaderName.size() <= 100
+        && data.createdAt == request.time;
+    }
+
+    // 1. Collections
+    match /gallery/{photoId} {
+      allow list: if isSignedIn();
+      allow get: if isSignedIn();
+      allow create: if isSignedIn() 
+        && isValidId(photoId) 
+        && isValidGalleryPhoto(incoming());
+      allow delete: if isSignedIn() && existing().uploadedBy == request.auth.uid;
+    }
+  }
+}

@@ -45,6 +45,17 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, deleteDoc, doc, getDocFromServer, serverTimestamp, setDoc } from 'firebase/firestore';
+import firebaseConfig from '../firebase-applet-config.json';
+
+// --- Firebase Initialization ---
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+export const auth = getAuth();
+const googleProvider = new GoogleAuthProvider();
+
 // --- Types ---
 interface CrewMember {
   id: string;
@@ -82,6 +93,54 @@ const STANDARD_PACKLIST: string[] = [
   "Wenig Stuff / Jacken"
 ];
 
+// --- Firebase Helpers ---
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 // --- AI Setup ---
 const getGeminiKey = () => {
   const key = process.env.GEMINI_API_KEY;
@@ -96,6 +155,30 @@ const ai = new GoogleGenAI({ apiKey: getGeminiKey() });
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [user, setUser] = useState<User | null>(null);
+
+  // Test Firestore connection
+  useEffect(() => {
+    async function testConnection() {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Please check your Firebase configuration.");
+        }
+      }
+    }
+    testConnection();
+  }, []);
+
+  // Auth listener
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
   const [crew, setCrew] = useState<CrewMember[]>([]);
   const [packList, setPackList] = useState<PackingItem[]>([]);
   const [song, setSong] = useState<string>('');
@@ -145,7 +228,14 @@ export default function App() {
     try {
       const result = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: "Erstelle einen lustigen, kurzen Songtext (ca. 2 Strophen und Refrain) über die 'Lega di Ticinese' im Kontext eines Fratelli-Wochenendes im Tessin (Rivero). Der Song sollte sarkasmtisch, lustig und in Mundart (oder mit Tessiner Einschlag) sein. Das Motto ist 'Fratelli' und 'Spaß haben'. Erwähne die Crew (Toby, Marion, Tai, etc.). Es ist KEIN reines Männerwochenende!",
+        contents: `Erstelle einen legendären, rhythmischen Songtext (ca. 3 Strophen und ein fetter Refrain) für die "Lega dei Fratelli". 
+        Kontext: Fratellihof-Wochenende in Rivera, Tessin. 
+        Motto: "Gute Schneid, halbe Arbeit, zwei Rinder."
+        Inside-Jokes zum Einbauen: "Druffa gegen Rechts", "Hurensöhne", "Anti-Stau Strategie (Zug)", "Death-Sense schärfen", "Wiet machen", "Grappa im Loch".
+        Stil: Mundart (Zürich/Tessiner Mix), asozial aber herzlich, hochemotional, wie eine Hymne. 
+        Struktur: Klar getrennte Strophen und Refrain. 
+        Crew: Toby (Polier), Marion, Tai, Jojo, Flo, Vali, Stephie, Marco, Tim. 
+        WICHTIG: Es muss ein richtiger Banger sein!`,
       });
       setSong(result.text || "Song konnte nicht geladen werden.");
     } catch (error) {
@@ -175,32 +265,68 @@ export default function App() {
     if (!song) return;
     setIsPlaying(true);
     
-    // Create a simple rhythmic beat using AudioContext
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     
-    const playBeat = () => {
+    // Better 4/4 Techno Beat
+    const playKick = (time: number) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
       osc.connect(gain);
       gain.connect(audioCtx.destination);
       
-      osc.frequency.setValueAtTime(150, audioCtx.currentTime);
-      gain.gain.setValueAtTime(0.5, audioCtx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+      osc.frequency.setValueAtTime(150, time);
+      osc.frequency.exponentialRampToValueAtTime(40, time + 0.1);
       
-      osc.start();
-      osc.stop(audioCtx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.8, time);
+      gain.gain.exponentialRampToValueAtTime(0.01, time + 0.5);
+      
+      osc.start(time);
+      osc.stop(time + 0.5);
     };
 
-    const beatInterval = setInterval(playBeat, 500);
+    const playHiHat = (time: number) => {
+      const bufferSize = audioCtx.sampleRate * 0.05;
+      const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+      
+      const source = audioCtx.createBufferSource();
+      source.buffer = buffer;
+      const gain = audioCtx.createGain();
+      
+      const filter = audioCtx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.value = 7000;
+      
+      source.connect(filter);
+      filter.connect(gain);
+      gain.connect(audioCtx.destination);
+      
+      gain.gain.setValueAtTime(0.2, time);
+      gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
+      
+      source.start(time);
+      source.stop(time + 0.05);
+    };
+
+    let beatCount = 0;
+    const interval = 0.5; // 120 BPM
+    const timerId = setInterval(() => {
+      const now = audioCtx.currentTime;
+      playKick(now);
+      if (beatCount % 2 === 1) playHiHat(now);
+      beatCount++;
+    }, interval * 1000);
 
     const utterance = new SpeechSynthesisUtterance(song);
     utterance.lang = 'de-CH';
-    utterance.rate = 0.9;
-    utterance.pitch = 1.0;
+    utterance.rate = 0.85;
+    utterance.pitch = 0.9;
     utterance.onend = () => {
       setIsPlaying(false);
-      clearInterval(beatInterval);
+      clearInterval(timerId);
       audioCtx.close();
     };
     window.speechSynthesis.speak(utterance);
@@ -511,9 +637,63 @@ export default function App() {
       setLevel(Math.floor(score / 100) + 1);
     }, [score]);
 
+    const playHitSound = (type: 'jans' | 'cassis' | 'roesti') => {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      if (type === 'jans') {
+        // Regal Fanfare (Arpeggio)
+        const playNote = (freq: number, startTime: number) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sawtooth';
+          osc.frequency.setValueAtTime(freq, startTime);
+          gain.gain.setValueAtTime(0.3, startTime);
+          gain.gain.exponentialRampToValueAtTime(0.01, startTime + 0.3);
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(startTime);
+          osc.stop(startTime + 0.3);
+        };
+        const now = audioCtx.currentTime;
+        playNote(523.25, now); // C5
+        playNote(659.25, now + 0.1); // E5
+        playNote(783.99, now + 0.2); // G5
+      } else if (type === 'cassis') {
+        // Synth Pew Pew
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(1000, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.2);
+        gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.2);
+      } else {
+        // Comical Bonk
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'square';
+        osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.6, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.1);
+      }
+
+      setTimeout(() => audioCtx.close(), 1000);
+    };
+
     const hit = (id: number, x: number, y: number) => {
       const target = targets.find(t => t.id === id);
       if (!target) return;
+
+      playHitSound(target.type);
 
       if (target.hp <= 1) {
         setScore(prev => prev + (target.type === 'jans' ? 100 : target.type === 'cassis' ? 50 : 25));
@@ -569,13 +749,22 @@ export default function App() {
                 <div className="h-1 w-12 bg-gray-200 absolute -top-4 rounded-full overflow-hidden border border-black shadow-sm">
                    <div className="bg-red-500 h-full" style={{ width: `${(target.hp / (target.type === 'jans' ? 5 : target.type === 'cassis' ? 2 : 1)) * 100}%` }} />
                 </div>
-                <span className="select-none group-active:scale-110 transition-transform overflow-hidden rounded-full w-full h-full flex items-center justify-center bg-slate-200 border-2 border-white shadow-inner">
+                <span className="select-none group-active:scale-110 transition-transform overflow-hidden rounded-full w-full h-full flex items-center justify-center bg-slate-200 border-2 border-white shadow-inner relative">
                   {target.type === 'jans' ? (
-                    <img src="https://ais-blob-ecrtsvd3sf6x3relmkjwh4-54385108045.europe-west2.run.app/images/84a282f6-391a-4286-9a2c-f673e5102555.png" alt="jans" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                    <div className="flex flex-col items-center justify-center w-full h-full bg-indigo-500 text-white rounded-full p-2">
+                       <span className="text-4xl">🤴</span>
+                       <span className="text-[10px] font-black uppercase mt-1">JANS</span>
+                    </div>
                   ) : target.type === 'cassis' ? (
-                    <img src="https://ais-blob-ecrtsvd3sf6x3relmkjwh4-54385108045.europe-west2.run.app/images/5f385c7c-4734-45e0-94e0-936636735e16.png" alt="cassis" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                    <div className="flex flex-col items-center justify-center w-full h-full bg-red-500 text-white rounded-full p-2">
+                       <span className="text-3xl">🕶️</span>
+                       <span className="text-[10px] font-black uppercase mt-1">IGNAZIO</span>
+                    </div>
                   ) : (
-                    <img src="https://ais-blob-ecrtsvd3sf6x3relmkjwh4-54385108045.europe-west2.run.app/images/5e54d60d-4584-48f6-be25-f72535041071.png" alt="roesti" className="w-full h-full object-cover rounded-full" referrerPolicy="no-referrer" />
+                    <div className="flex flex-col items-center justify-center w-full h-full bg-green-500 text-white rounded-full p-2">
+                       <span className="text-2xl">🚜</span>
+                       <span className="text-[10px] font-black uppercase mt-1">ALBERT</span>
+                    </div>
                   )}
                 </span>
               </motion.button>
@@ -672,10 +861,79 @@ export default function App() {
     );
   };
 
+  const MusicVideo = ({ active }: { active: boolean }) => {
+    if (!active) return null;
+
+    const slogans = ["DRUFFA GEGEN RECHTS!", "HURENSÖHNE!", "GUTE SCHNEID!", "ZWEI RINDER!", "HALBE ARBEIT!", "DIE LEGA RUFT!"];
+    const icons = [Hammer, Beer, Zap, Sword, Mountain];
+
+    return (
+      <div className="absolute inset-0 z-50 pointer-events-none overflow-hidden bg-red-600/90 mix-blend-multiply">
+        <motion.div 
+          animate={{ background: ["rgba(255,0,0,0.4)", "rgba(0,0,255,0.4)", "rgba(255,255,0,0.4)", "rgba(255,0,0,0.4)"] }}
+          transition={{ duration: 0.5, repeat: Infinity }}
+          className="w-full h-full"
+        />
+        
+        {/* Floating Icons */}
+        {[...Array(12)].map((_, i) => {
+          const Icon = icons[i % icons.length];
+          return (
+            <motion.div
+              key={i}
+              initial={{ x: Math.random() * 100 + "%", y: "110%", rotate: 0 }}
+              animate={{ 
+                y: "-110%", 
+                rotate: 360,
+                x: [Math.random() * 100 + "%", Math.random() * 100 + "%"]
+              }}
+              transition={{ 
+                duration: 2 + Math.random() * 2, 
+                repeat: Infinity, 
+                ease: "linear",
+                delay: i * 0.2
+              }}
+              className="absolute text-white/40"
+            >
+              <Icon size={Math.random() * 60 + 40} />
+            </motion.div>
+          );
+        })}
+
+        {/* Slogans */}
+        <div className="absolute inset-0 flex flex-col justify-around">
+          {slogans.map((slogan, i) => (
+            <motion.div
+              key={i}
+              initial={{ x: i % 2 === 0 ? "100%" : "-100%" }}
+              animate={{ x: i % 2 === 0 ? "-100%" : "100%" }}
+              transition={{ duration: 3, repeat: Infinity, ease: "linear", delay: i * 0.5 }}
+              className="whitespace-nowrap text-8xl font-black text-white stroke-black stroke-4 opacity-30 italic"
+            >
+              {slogan} {slogan} {slogan}
+            </motion.div>
+          ))}
+        </div>
+
+        {/* Center Lyric Highlight */}
+        <motion.div 
+          animate={{ scale: [1, 1.2, 1], rotate: [0, 5, -5, 0] }}
+          transition={{ duration: 0.25, repeat: Infinity }}
+          className="absolute inset-0 flex items-center justify-center"
+        >
+          <div className="bg-yellow-400 text-black px-8 py-4 border-8 border-black -rotate-6 shadow-[15px_15px_0px_0px_rgba(0,0,0,1)]">
+            <h3 className="text-6xl font-black uppercase italic tracking-tighter">LEGA DEL FRATELLI</h3>
+          </div>
+        </motion.div>
+      </div>
+    );
+  };
+
   const AISection = () => (
     <div className="max-w-3xl mx-auto space-y-6">
-      <div className="bg-slate-900 text-white rounded-xl border-4 border-slate-900 overflow-hidden shadow-[8px_8px_0px_0px_rgba(239,68,68,1)]">
-        <header className="bg-red-600 p-4 border-b-4 border-slate-900 flex justify-between items-center">
+      <div className="bg-slate-900 text-white rounded-xl border-4 border-slate-900 overflow-hidden shadow-[8px_8px_0px_0px_rgba(239,68,68,1)] relative">
+        <MusicVideo active={isPlaying} />
+        <header className="bg-red-600 p-4 border-b-4 border-slate-900 flex justify-between items-center relative z-10">
            <h2 className="text-xl font-black uppercase italic">Lega di Ticinese (Fratelli Edit)</h2>
            <Music className="w-6 h-6 text-yellow-400" />
         </header>
@@ -688,6 +946,18 @@ export default function App() {
             </div>
           ) : song ? (
             <div className="space-y-6">
+              {isPlaying && (
+                <div className="flex justify-center items-end gap-1 h-12 mb-4">
+                  {[...Array(12)].map((_, i) => (
+                    <motion.div
+                      key={i}
+                      animate={{ height: [10, Math.random() * 40 + 10, 10] }}
+                      transition={{ repeat: Infinity, duration: 0.3 + Math.random() * 0.2 }}
+                      className="w-2 bg-red-500 rounded-t"
+                    />
+                  ))}
+                </div>
+              )}
               <pre className="whitespace-pre-wrap font-sans text-lg font-bold leading-relaxed text-slate-100 italic">"{song}"</pre>
               <div className="flex justify-center gap-4 border-t-2 border-slate-800 pt-6">
                 <button 
@@ -722,6 +992,7 @@ export default function App() {
   const WinterSection = () => {
     const [ritualProgress, setRitualProgress] = useState(0);
     const [wisdom, setWisdom] = useState("");
+    const [floatingTexts, setFloatingTexts] = useState<{ id: number; x: number; y: number; text: string }[]>([]);
     
     const quotes = [
       "Wer im Winter schläft, hat im Mai mehr Schneid.",
@@ -732,8 +1003,15 @@ export default function App() {
       "Ignazio sagt: 'Mehr Sonne, weniger Stress!'"
     ];
 
-    const addRitual = (amount: number) => {
+    const addRitual = (amount: number, type?: string) => {
       setRitualProgress(prev => Math.min(100, prev + amount));
+      
+      // Add floating text for feedback
+      const id = Date.now();
+      const text = type === 'jump' ? 'HOPP!' : type === 'insult' ? 'HUERESOOOOHN!' : `+${amount}`;
+      setFloatingTexts(prev => [...prev, { id, x: 50, y: 50, text }]);
+      setTimeout(() => setFloatingTexts(prev => prev.filter(t => t.id !== id)), 1000);
+
       if (ritualProgress + amount >= 100 && unlockedIgnazio < 2) {
         setUnlockedIgnazio(2);
       }
@@ -745,6 +1023,21 @@ export default function App() {
 
     return (
       <div className="max-w-2xl mx-auto space-y-8 text-center min-h-[600px] flex flex-col items-center justify-center bg-purple-600 border-4 border-slate-900 rounded-3xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] text-white p-8 relative overflow-hidden">
+        {/* Floating feedback texts */}
+        <AnimatePresence>
+          {floatingTexts.map(ft => (
+            <motion.div
+              key={ft.id}
+              initial={{ opacity: 1, y: 0, scale: 0.5 }}
+              animate={{ opacity: 0, y: -200, scale: 2 }}
+              exit={{ opacity: 0 }}
+              className="absolute z-50 font-black text-4xl text-yellow-400 stroke-black stroke-2 drop-shadow-[4px_4px_0px_rgba(0,0,0,1)] pointer-events-none"
+            >
+              {ft.text}
+            </motion.div>
+          ))}
+        </AnimatePresence>
+
         <h2 className="text-3xl font-black uppercase tracking-widest italic flex items-center gap-4 relative z-10">
           <Mountain className="w-10 h-10" /> Das Winterloch-Ritual
         </h2>
@@ -754,7 +1047,12 @@ export default function App() {
             <div className="flex justify-around items-center gap-8">
               <div className="text-center">
                 <motion.div 
-                  animate={{ 
+                  animate={ritualProgress > 50 ? { 
+                    y: [0, -20, 0],
+                    rotate: [0, 5, -5, 0]
+                  } : {}}
+                  transition={{ repeat: Infinity, duration: 0.5 }}
+                  style={{ 
                     filter: `grayscale(${100 - ritualProgress}%)`,
                     scale: 1 + ritualProgress/200 
                   }}
@@ -766,7 +1064,12 @@ export default function App() {
               </div>
               <div className="text-center">
                 <motion.div 
-                  animate={{ 
+                  animate={ritualProgress > 50 ? { 
+                    y: [0, -15, 0],
+                    rotate: [0, -5, 5, 0]
+                  } : {}}
+                  transition={{ repeat: Infinity, duration: 0.6 }}
+                  style={{ 
                     filter: `grayscale(${100 - ritualProgress}%)`,
                     scale: 1 + ritualProgress/200 
                   }}
@@ -791,21 +1094,23 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
               {[
-                { l: 'Birra', v: 15, i: <Beer className="w-4 h-4" /> },
-                { l: 'Sonne', v: 10, i: <Sparkles className="w-4 h-4" /> },
-                { l: 'Grappa', v: 25, i: <Zap className="w-4 h-4" /> },
-                { l: 'Crack', v: 40, i: <Plus className="w-4 h-4" /> },
-                { l: 'Crackpfeiffe', v: 30, i: <div className="relative"><Wind className="w-4 h-4" /><div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-gray-400 rounded-full animate-ping" /></div> }
+                { l: 'Birra', v: 10, i: <Beer className="w-4 h-4" /> },
+                { l: 'Grappa', v: 15, i: <Zap className="w-4 h-4" /> },
+                { l: 'Springen', v: 20, i: <Zap className="w-4 h-4 text-blue-400" />, t: 'jump' },
+                { l: 'Beschimpfen', v: 30, i: <Wind className="w-4 h-4 text-red-400" />, t: 'insult' },
+                { l: 'Sonne', v: 5, i: <Sparkles className="w-4 h-4" /> },
+                { l: 'Crack', v: 25, i: <Plus className="w-4 h-4" /> },
+                { l: 'Crackpfeiffe', v: 20, i: <div className="relative"><Wind className="w-4 h-4" /><div className="absolute -top-1 -right-1 w-1.5 h-1.5 bg-gray-400 rounded-full animate-ping" /></div> }
               ].map(rit => (
                 <button 
                   key={rit.l}
-                  onClick={() => addRitual(rit.v)}
-                  className="p-3 bg-white text-purple-600 border-2 border-slate-900 rounded-xl font-black text-[10px] uppercase shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-yellow-400 hover:text-black active:translate-y-1 transition-all flex flex-col items-center gap-1"
+                  onClick={() => addRitual(rit.v, rit.t)}
+                  className={`p-3 bg-white text-purple-600 border-2 border-slate-900 rounded-xl font-black text-[10px] uppercase shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-yellow-400 hover:text-black active:translate-y-1 transition-all flex flex-col items-center gap-1 ${rit.t === 'insult' ? 'col-span-1 sm:col-span-1' : ''}`}
                 >
                   {rit.i}
-                  {rit.l}
+                  {rit.l === 'Beschimpfen' ? 'HUERESOOOOHN' : rit.l}
                 </button>
               ))}
             </div>
@@ -842,6 +1147,29 @@ export default function App() {
     <div className="min-h-screen bg-amber-50 font-sans text-slate-900 p-4 md:p-8">
       <div className="max-w-6xl mx-auto">
         
+        {/* User bar */}
+        <div className="flex justify-end mb-4">
+          {user ? (
+            <div className="flex items-center gap-3 bg-white border-2 border-slate-900 px-3 py-1.5 rounded-full shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">
+              {user.photoURL && <img src={user.photoURL} alt={user.displayName || ''} className="w-6 h-6 rounded-full border border-slate-900" />}
+              <span className="text-[10px] font-black uppercase">{user.displayName || user.email}</span>
+              <button 
+                onClick={() => auth.signOut()}
+                className="text-[10px] font-black uppercase text-red-600 hover:underline"
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <button 
+              onClick={() => signInWithPopup(auth, googleProvider)}
+              className="px-4 py-1.5 bg-white border-2 border-slate-900 rounded-full font-black text-[10px] uppercase shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-slate-50 transition-all"
+            >
+              Anmelden
+            </button>
+          )}
+        </div>
+
         {/* Navigation */}
         <nav className="flex flex-wrap justify-center gap-2 md:gap-4 mb-8">
           <NavButton active={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} icon={<Sparkles className="w-4 h-4" />} label="Dash" color="bg-red-600 !text-white" />
